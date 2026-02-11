@@ -1,0 +1,91 @@
+name: Terraform Apply (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to deploy (dev, stg, prd)'
+        required: true
+        type: string
+      tf_version:
+        description: 'Terraform version'
+        required: false
+        type: string
+        default: "1.9"
+      tf_working_dir:
+        description: 'Terraform working directory'
+        required: false
+        type: string
+        default: "./platform"
+      aws_region:
+        description: 'AWS region'
+        required: false
+        type: string
+        default: "eu-west-1"
+
+jobs:
+  terraform-apply:
+    name: Apply to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.tf_version }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: ${{ inputs.tf_working_dir }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="key=platform/${{ inputs.environment }}/terraform.tfstate"
+        working-directory: ${{ inputs.tf_working_dir }}
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ${{ inputs.tf_working_dir }}
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file="environments/${{ inputs.environment }}.tfvars" \
+            -out=tfplan \
+            -input=false
+        working-directory: ${{ inputs.tf_working_dir }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -input=false tfplan
+        working-directory: ${{ inputs.tf_working_dir }}
+
+      - name: Terraform Output
+        run: terraform output -json
+        working-directory: ${{ inputs.tf_working_dir }}
+        continue-on-error: true
+
+      - name: Create deployment summary
+        run: |
+          echo "## 🚀 ${{ inputs.environment }} Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AWS Account:** \`$(aws sts get-caller-identity --query Account --output text)\`" >> $GITHUB_STEP_SUMMARY
+          echo "**AWS Region:** ${{ inputs.aws_region }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Pusher:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Terraform Version:** ${{ inputs.tf_version }}" >> $GITHUB_STEP_SUMMARY

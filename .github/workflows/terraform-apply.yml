@@ -1,0 +1,66 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'platform/**'
+      - '.github/workflows/terraform-apply.yml'
+      - '.github/workflows/terraform-apply-reusable.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: "1.9"
+  AWS_REGION: "eu-west-1"
+
+jobs:
+  # Deploy to Development
+  deploy-dev:
+    name: Deploy Dev
+    uses: ./.github/workflows/terraform-apply-reusable.yml
+    with:
+      environment: dev
+      tf_version: "1.9"
+      aws_region: eu-west-1
+
+  # Deploy to Staging (depends on dev)
+  deploy-stg:
+    name: Deploy Staging
+    needs: deploy-dev
+    uses: ./.github/workflows/terraform-apply-reusable.yml
+    with:
+      environment: stg
+      tf_version: "1.9"
+      aws_region: eu-west-1
+
+  # Deploy to Production (depends on stg)
+  deploy-prd:
+    name: Deploy Production
+    needs: deploy-stg
+    uses: ./.github/workflows/terraform-apply-reusable.yml
+    with:
+      environment: prd
+      tf_version: "1.9"
+      aws_region: eu-west-1
+
+  # Final summary
+  deployment-complete:
+    name: Deployment Complete
+    needs: deploy-prd
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create final summary
+        run: |
+          echo "## 🎉 All Environments Deployed Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The changes have been successfully deployed to all environments:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Dev** - Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Staging** - Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Production** - Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Pusher:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

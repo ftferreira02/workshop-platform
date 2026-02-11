@@ -1,0 +1,150 @@
+name: Terraform Manual/Emergency
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy/plan'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - prd
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+      branch:
+        description: 'Branch to run against'
+        required: true
+        type: string
+        default: 'main'
+      reason:
+        description: 'Reason for manual run (for audit trail)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: "1.9"
+  TF_WORKING_DIR: "./platform"
+  AWS_REGION: "eu-west-1"
+
+jobs:
+  # Map environment to GitHub environment name
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      github_environment: ${{ steps.map.outputs.github_environment }}
+    steps:
+      - name: Map environment
+        id: map
+        run: |
+          if [ "${{ inputs.environment }}" == "prd" ]; then
+            echo "github_environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "github_environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Execute the manual operation
+  execute:
+    name: ${{ inputs.action }} - ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    needs: setup
+    environment: ${{ needs.setup.outputs.github_environment }}
+
+    steps:
+      - name: Log manual execution
+        run: |
+          echo "🚨 MANUAL EXECUTION" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Initiated by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        continue-on-error: true
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="key=platform/${{ inputs.environment }}/terraform.tfstate"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var-file="environments/${{ inputs.environment }}.tfvars" \
+            -out=tfplan \
+            -input=false
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Apply
+        if: inputs.action == 'apply'
+        run: terraform apply -auto-approve -input=false tfplan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Output
+        if: inputs.action == 'apply'
+        run: terraform output -json
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        continue-on-error: true
+
+      - name: Create summary
+        run: |
+          echo "## 🎯 Manual ${{ inputs.action }} - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.action }}" == "apply" ]; then
+            echo "### ✅ Apply Successful" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 📋 Plan Completed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**AWS Account:** \`${{ steps.account.outputs.account_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Executed by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Note**: This was a manual execution outside the normal CI/CD flow." >> $GITHUB_STEP_SUMMARY
