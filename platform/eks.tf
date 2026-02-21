@@ -28,7 +28,8 @@ resource "aws_eks_cluster" "main" {
   }
 
   access_config {
-    authentication_mode = "API_AND_CONFIG_MAP"
+    authentication_mode                    = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_access = true
   }
 
   enabled_cluster_log_types = var.cluster_log_types
